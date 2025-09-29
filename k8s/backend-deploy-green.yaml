@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-green
+  namespace: staging
+  labels:
+    app: backend
+    color: green
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+      color: green
+  template:
+    metadata:
+      labels:
+        app: backend
+        color: green
+    spec:
+      containers:
+      - name: backend
+        image: REPLACE_ACR/login/newsflow-backend:REPLACE_TAG
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PORT
+          value: "8080"
+        - name: NEWSAPI_KEY
+          valueFrom:
+            secretKeyRef:
+              name: newsapi-secret
+              key: NEWSAPI_KEY
+        - name: NEWSAPI_URL
+          valueFrom:
+            configMapKeyRef:
+              name: backend-config
+              key: NEWSAPI_URL
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: azurefile-pvc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-green
+  namespace: prod
+  labels:
+    app: backend
+    color: green
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+      color: green
+  template:
+    metadata:
+      labels:
+        app: backend
+        color: green
+    spec:
+      containers:
+      - name: backend
+        image: REPLACE_ACR/login/newsflow-backend:REPLACE_TAG
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PORT
+          value: "8080"
+        - name: NEWSAPI_KEY
+          valueFrom:
+            secretKeyRef:
+              name: newsapi-secret
+              key: NEWSAPI_KEY
+        - name: NEWSAPI_URL
+          valueFrom:
+            configMapKeyRef:
+              name: backend-config
+              key: NEWSAPI_URL
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: azurefile-pvc

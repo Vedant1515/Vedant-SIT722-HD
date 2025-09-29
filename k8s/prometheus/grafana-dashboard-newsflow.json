@@ -1,0 +1,109 @@
+{
+  "title": "NewsFlow - Backend Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "namespace",
+        "label": "Namespace",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(kube_pod_info, namespace)",
+        "current": { "text": "staging", "value": "staging", "selected": true },
+        "includeAll": false,
+        "multi": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Request rate per minute by path",
+      "targets": [
+        {
+          "expr": "sum by (path) (rate(http_requests_total{namespace=\"$namespace\"}[1m]))",
+          "legendFormat": "{{path}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Error rate percentage",
+      "targets": [
+        {
+          "expr": "100 * (sum(rate(http_requests_total{namespace=\"$namespace\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{namespace=\"$namespace\"}[5m])))",
+          "legendFormat": "5xx %"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency p95 / p99",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(news_api_response_time_seconds_bucket{namespace=\"$namespace\"}[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(news_api_response_time_seconds_bucket{namespace=\"$namespace\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "type": "bargauge",
+      "title": "NewsAPI success vs failures",
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(news_api_calls_total{namespace=\"$namespace\"}[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Pod CPU",
+      "targets": [
+        {
+          "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container!=\"\",pod=~\"backend-(blue|green).*\"}[2m]))",
+          "legendFormat": "{{pod}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "cores" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Pod Memory",
+      "targets": [
+        {
+          "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\",container!=\"\",pod=~\"backend-(blue|green).*\"})",
+          "legendFormat": "{{pod}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Blue vs Green request split",
+      "targets": [
+        {
+          "expr": "sum by (color) (rate(http_requests_total{namespace=\"$namespace\"}[1m]))",
+          "legendFormat": "{{color}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Replicas (HPA target color)",
+      "targets": [
+        {
+          "expr": "max(kube_deployment_status_replicas{namespace=\"$namespace\",deployment=~\"backend-(blue|green)\"})",
+          "legendFormat": "replicas"
+        }
+      ]
+    }
+  ]
+}

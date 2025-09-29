@@ -1,0 +1,66 @@
+# Azure Files CSI PV + PVC using a secret with storage account name and key
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: azurefile-pv
+  namespace: staging
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: file.csi.azure.com
+    volumeHandle: azurefile-vol-staging
+    volumeAttributes:
+      shareName: newsflow-staging
+    nodeStageSecretRef:
+      name: azure-storage-secret
+      namespace: staging
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: azurefile-pvc
+  namespace: staging
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+  volumeName: azurefile-pv
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: azurefile-pv
+  namespace: prod
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: file.csi.azure.com
+    volumeHandle: azurefile-vol-prod
+    volumeAttributes:
+      shareName: newsflow-prod
+    nodeStageSecretRef:
+      name: azure-storage-secret
+      namespace: prod
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: azurefile-pvc
+  namespace: prod
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+  volumeName: azurefile-pv

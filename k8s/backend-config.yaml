@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: staging
+data:
+  NEWSAPI_URL: "https://newsapi.org/v2/top-headlines?country=us"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: prod
+data:
+  NEWSAPI_URL: "https://newsapi.org/v2/top-headlines?country=us"

@@ -1,0 +1,17 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: backend-sm
+  namespace: staging
+  labels:
+    release: monitor
+spec:
+  selector:
+    matchLabels:
+      app: backend
+  namespaceSelector:
+    matchNames: ["staging"]
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

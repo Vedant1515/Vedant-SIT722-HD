@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-blue
+  namespace: staging
+  labels: { app: backend, color: blue }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: backend, color: blue }
+  template:
+    metadata:
+      labels: { app: backend, color: blue }
+    spec:
+      containers:
+        - name: backend
+          image: REPLACE_ACR/login/newsflow-backend:REPLACE_TAG
+          ports: [ { containerPort: 8080 } ]
+          env:
+            - { name: PORT, value: "8080" }
+            - name: NEWSAPI_KEY
+              valueFrom: { secretKeyRef: { name: newsapi-secret, key: NEWSAPI_KEY } }
+            - name: NEWSAPI_URL
+              valueFrom: { configMapKeyRef: { name: backend-config, key: NEWSAPI_URL } }
+            - { name: COLOR, value: "blue" }
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /ready, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 2
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: azurefile-pvc }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-blue
+  namespace: prod
+  labels: { app: backend, color: blue }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: backend, color: blue }
+  template:
+    metadata:
+      labels: { app: backend, color: blue }
+    spec:
+      containers:
+        - name: backend
+          image: REPLACE_ACR/login/newsflow-backend:REPLACE_TAG
+          ports: [ { containerPort: 8080 } ]
+          env:
+            - { name: PORT, value: "8080" }
+            - name: NEWSAPI_KEY
+              valueFrom: { secretKeyRef: { name: newsapi-secret, key: NEWSAPI_KEY } }
+            - name: NEWSAPI_URL
+              valueFrom: { configMapKeyRef: { name: backend-config, key: NEWSAPI_URL } }
+            - { name: COLOR, value: "blue" }
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /ready, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 2
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: azurefile-pvc }

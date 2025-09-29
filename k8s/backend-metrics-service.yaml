@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-all
+  namespace: staging
+  labels:
+    app: backend
+spec:
+  selector:
+    app: backend           # no color label, targets blue and green
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-all
+  namespace: prod
+  labels:
+    app: backend
+spec:
+  selector:
+    app: backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
