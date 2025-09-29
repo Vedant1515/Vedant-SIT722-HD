@@ -1,6 +1,7 @@
-node_modules
-.env
-.DS_Store
-kubeconfig
-infra/.terraform
-infra/.terraform.lock.hcl
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+crash.log
+terraform.tfvars
+terraform.tfvars.json
