@@ -8,6 +8,7 @@ spec:
     storage: 5Gi
   accessModes: [ReadWriteMany]
   persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
   csi:
     driver: file.csi.azure.com
     volumeHandle: azurefile-vol-staging
@@ -24,6 +25,7 @@ metadata:
   namespace: staging
 spec:
   accessModes: [ReadWriteMany]
+  storageClassName: ""
   resources:
     requests:
       storage: 5Gi
@@ -40,6 +42,7 @@ spec:
     storage: 5Gi
   accessModes: [ReadWriteMany]
   persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
   csi:
     driver: file.csi.azure.com
     volumeHandle: azurefile-vol-prod
@@ -56,6 +59,7 @@ metadata:
   namespace: prod
 spec:
   accessModes: [ReadWriteMany]
+  storageClassName: ""
   resources:
     requests:
       storage: 5Gi
