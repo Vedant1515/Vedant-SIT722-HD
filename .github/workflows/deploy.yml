@@ -15,32 +15,46 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup kubectl
+        shell: bash
+        env:
+          AKS_KUBECONFIG_B64: ${{ secrets.AKS_KUBECONFIG }}
         run: |
-          echo "${{ secrets.AKS_KUBECONFIG }}" | base64 -d > kubeconfig
+          python - <<'PY'
+          import os, base64, re, sys
+          b64 = os.environ['AKS_KUBECONFIG_B64']
+          b64 = re.sub(r'\s+', '', b64).replace('\r','')
+          try:
+            data = base64.b64decode(b64, validate=True)
+          except Exception as e:
+            sys.stderr.write(f"Invalid base64 in AKS_KUBECONFIG: {e}\n")
+            sys.exit(1)
+          open('kubeconfig','wb').write(data)
+          PY
           echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
           kubectl version --client
 
       - name: Render manifests with image tags
         run: |
           sed -i "s#REPLACE_ACR#${{ secrets.ACR_LOGIN_SERVER }}#g" k8s/backend-deploy-blue.yaml k8s/backend-deploy-green.yaml k8s/frontend-deploy.yaml
-          sed -i "s#REPLACE_TAG#${{ env.IMAGE_TAG }}#g" k8s/backend-deploy-blue.yaml k8s/backend-deploy-green.yaml k8s/frontend-deploy.yaml
+          sed -i "s#REPLACE_TAG#${{ env.IMAGE_TAG }}#g"           k8s/backend-deploy-blue.yaml k8s/backend-deploy-green.yaml k8s/frontend-deploy.yaml
 
+      # These files create BOTH namespaces; safe to apply once.
       - name: Create namespaces
         run: |
           kubectl apply -f k8s/namespace-staging.yaml
           kubectl apply -f k8s/namespace-prod.yaml
 
-      - name: Bootstrap secrets and configmaps
+      # IMPORTANT: Do NOT use -n here; the file contains both namespaces inside.
+      - name: ConfigMaps
         run: |
-          # Config
-          kubectl -n staging apply -f k8s/backend-config.yaml
-          kubectl -n prod    apply -f k8s/backend-config.yaml
+          kubectl apply -f k8s/backend-config.yaml
 
-          # NewsAPI secret
+      # Secrets are created imperatively per namespace (no namespaces in the secret objects), so keep -n.
+      - name: Secrets
+        run: |
           kubectl -n staging create secret generic newsapi-secret --from-literal=NEWSAPI_KEY="${{ secrets.NEWSAPI_KEY }}" --dry-run=client -o yaml | kubectl apply -f -
           kubectl -n prod    create secret generic newsapi-secret --from-literal=NEWSAPI_KEY="${{ secrets.NEWSAPI_KEY }}" --dry-run=client -o yaml | kubectl apply -f -
 
-          # Azure Storage secret, created from secrets that infra workflow saved
           kubectl -n staging create secret generic azure-storage-secret \
             --from-literal=azurestorageaccountname="${{ secrets.STORAGE_ACCOUNT_NAME }}" \
             --from-literal=azurestorageaccountkey="${{ secrets.STORAGE_ACCOUNT_KEY }}" \
@@ -51,43 +65,46 @@ jobs:
             --from-literal=azurestorageaccountkey="${{ secrets.STORAGE_ACCOUNT_KEY }}" \
             --dry-run=client -o yaml | kubectl apply -f -
 
+      # IMPORTANT: Do NOT use -n; file defines staging and prod PV/PVCs.
       - name: Storage PV and PVC
         run: |
-          kubectl -n staging apply -f k8s/storage-azurefile.yaml
-          kubectl -n prod    apply -f k8s/storage-azurefile.yaml
+          kubectl apply -f k8s/storage-azurefile.yaml
 
+      # Deployments YAMLs already include BOTH namespaces; apply without -n.
       - name: Deploy blue and green backends
         run: |
-          kubectl -n staging apply -f k8s/backend-deploy-blue.yaml
-          kubectl -n staging apply -f k8s/backend-deploy-green.yaml
-          kubectl -n prod    apply -f k8s/backend-deploy-blue.yaml
-          kubectl -n prod    apply -f k8s/backend-deploy-green.yaml
+          kubectl apply -f k8s/backend-deploy-blue.yaml
+          kubectl apply -f k8s/backend-deploy-green.yaml
 
+      # Service and HPA YAMLs also include BOTH namespaces; apply without -n.
       - name: Service and HPA
         run: |
-          kubectl -n staging apply -f k8s/backend-service.yaml
-          kubectl -n staging apply -f k8s/backend-hpa.yaml
-          kubectl -n prod    apply -f k8s/backend-service.yaml
-          kubectl -n prod    apply -f k8s/backend-hpa.yaml
+          kubectl apply -f k8s/backend-service.yaml
+          kubectl apply -f k8s/backend-hpa.yaml
 
+      # Frontend YAML includes BOTH namespaces; apply without -n.
       - name: Frontend
         run: |
-          kubectl -n staging apply -f k8s/frontend-deploy.yaml
-          kubectl -n prod    apply -f k8s/frontend-deploy.yaml
+          kubectl apply -f k8s/frontend-deploy.yaml
 
+      # Switch traffic (script uses -n internally for the target namespace).
       - name: Set color and wait
+        shell: bash
         run: |
-          # Staging always points to blue for soak
           bash k8s/scripts/switch_color.sh staging blue
-          kubectl -n staging rollout status deploy/backend-blue --timeout=180s
-          kubectl -n staging rollout status deploy/frontend --timeout=180s
+          kubectl -n staging rollout status deploy/backend-blue --timeout=240s
+          kubectl -n staging rollout status deploy/frontend     --timeout=240s
 
-          # For main branch, promote green in prod, else keep blue
           if [ "${{ github.ref }}" = "refs/heads/main" ]; then
             bash k8s/scripts/switch_color.sh prod green
-            kubectl -n prod rollout status deploy/backend-green --timeout=180s
+            kubectl -n prod rollout status deploy/backend-green --timeout=240s
           else
             bash k8s/scripts/switch_color.sh prod blue
-            kubectl -n prod rollout status deploy/backend-blue --timeout=180s
+            kubectl -n prod rollout status deploy/backend-blue  --timeout=240s
           fi
-          kubectl -n prod rollout status deploy/frontend --timeout=180s
+          kubectl -n prod rollout status deploy/frontend --timeout=240s
+
+      - name: Show External IPs
+        run: |
+          echo "STAGING FRONTEND:"; kubectl -n staging get svc frontend-svc -o wide || true
+          echo "PROD FRONTEND:";    kubectl -n prod    get svc frontend-svc -o wide || true
