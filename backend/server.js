@@ -88,29 +88,32 @@ app.get("/health", (req, res) => {
 });
 
 // Readiness: checks NewsAPI reachability and optional DB TCP ping
+// Readiness: lightweight check - don't call external APIs on every probe!
 app.get("/ready", async (req, res) => {
   try {
-    // NewsAPI quick check with a small request
+    // Just check if NewsAPI key is configured
     if (!newsApiKey) throw new Error("NEWSAPI_KEY not set");
-    const r = await fetch(newsBase, { headers: { "X-Api-Key": newsApiKey } });
-    if (!r.ok) throw new Error(`NewsAPI status ${r.status}`);
-
-    // Optional DB TCP check if env provided (DB_HOST, DB_PORT)
+    
+    // Optional: Only check DB if configured
     const dbHost = process.env.DB_HOST;
     const dbPort = process.env.DB_PORT ? Number(process.env.DB_PORT) : null;
     if (dbHost && dbPort) {
       await new Promise((resolve, reject) => {
         const sock = net.connect({ host: dbHost, port: dbPort, timeout: 2000 }, () => {
-          sock.end(); resolve();
+          sock.end(); 
+          resolve();
         });
         sock.on("error", reject);
-        sock.on("timeout", () => { sock.destroy(); reject(new Error("DB TCP timeout")); });
+        sock.on("timeout", () => { 
+          sock.destroy(); 
+          reject(new Error("DB TCP timeout")); 
+        });
       });
     }
 
-    res.json({ ready: true, color, newsapi: "ok", db: dbHost && dbPort ? "ok" : "skipped" });
+    res.json({ ready: true, color, newsapi: "configured", db: dbHost && dbPort ? "ok" : "skipped" });
   } catch (e) {
-    res.status(503).json({ ready: false, error: e.message });
+    res.status(503).json({ ready: false, error: e.message, color });
   }
 });
 
