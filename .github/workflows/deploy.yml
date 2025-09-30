@@ -50,6 +50,21 @@ jobs:
             --from-literal=azurestorageaccountkey="${{ secrets.STORAGE_ACCOUNT_KEY }}" \
             --dry-run=client -o yaml | kubectl apply -f -
 
+      - name: Verify Azure File Shares
+        run: |
+          echo "Creating Azure File shares if they don't exist..."
+          az storage share create \
+            --name newsflow-staging \
+            --account-name ${{ secrets.STORAGE_ACCOUNT_NAME }} \
+            --account-key ${{ secrets.STORAGE_ACCOUNT_KEY }} \
+            --output none 2>/dev/null || echo "newsflow-staging share ready"
+          
+          az storage share create \
+            --name newsflow-prod \
+            --account-name ${{ secrets.STORAGE_ACCOUNT_NAME }} \
+            --account-key ${{ secrets.STORAGE_ACCOUNT_KEY }} \
+            --output none 2>/dev/null || echo "newsflow-prod share ready"
+
       - name: Storage PV and PVC
         run: |
           echo "Scaling down all deployments to release PVCs..."
@@ -57,43 +72,46 @@ jobs:
           kubectl -n prod scale deploy --all --replicas=0 --timeout=30s 2>/dev/null || true
           
           echo "Waiting for pods to terminate..."
-          sleep 20
+          sleep 15
           
           echo "Force deleting any remaining pods..."
           kubectl -n staging delete pods --all --grace-period=0 --force 2>/dev/null || true
           kubectl -n prod delete pods --all --grace-period=0 --force 2>/dev/null || true
           
-          echo "Waiting a bit more..."
           sleep 5
           
-          echo "Deleting existing PVCs with force..."
+          echo "Deleting existing PVCs..."
           kubectl -n staging delete pvc azurefile-pvc --ignore-not-found --force --grace-period=0 2>/dev/null || true
           kubectl -n prod delete pvc azurefile-pvc --ignore-not-found --force --grace-period=0 2>/dev/null || true
           
-          echo "Waiting for PVC cleanup..."
           sleep 5
+          
+          echo "Removing claimRef from PVs to make them Available..."
+          kubectl patch pv azurefile-pv-staging -p '{"spec":{"claimRef": null}}' 2>/dev/null || true
+          kubectl patch pv azurefile-pv-prod -p '{"spec":{"claimRef": null}}' 2>/dev/null || true
+          
+          sleep 3
           
           echo "Applying storage configuration..."
           kubectl apply -f k8s/storage-azurefile.yaml
           
+          sleep 5
+          
+          echo "Current PV status:"
+          kubectl get pv
+          
+          echo "Current PVC status:"
+          kubectl -n staging get pvc
+          kubectl -n prod get pvc
+          
           echo "Waiting for PVCs to bind..."
-          for i in {1..30}; do
-            STAGING_STATUS=$(kubectl -n staging get pvc azurefile-pvc -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
-            PROD_STATUS=$(kubectl -n prod get pvc azurefile-pvc -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
-            echo "Attempt $i: Staging=$STAGING_STATUS, Prod=$PROD_STATUS"
-            if [ "$STAGING_STATUS" = "Bound" ] && [ "$PROD_STATUS" = "Bound" ]; then
-              echo "Both PVCs are bound!"
-              break
-            fi
-            sleep 3
-          done
+          kubectl -n staging wait --for=jsonpath='{.status.phase}'=Bound pvc/azurefile-pvc --timeout=60s || echo "WARNING: Staging PVC not bound yet"
+          kubectl -n prod wait --for=jsonpath='{.status.phase}'=Bound pvc/azurefile-pvc --timeout=60s || echo "WARNING: Prod PVC not bound yet"
           
-          echo "Final PVC status:"
-          kubectl -n staging get pvc azurefile-pvc || true
-          kubectl -n prod get pvc azurefile-pvc || true
-          
-          echo "PV status:"
-          kubectl get pv || true
+          echo "Final status:"
+          kubectl get pv
+          kubectl -n staging get pvc
+          kubectl -n prod get pvc
 
       - name: Deploy blue and green backends
         run: |
