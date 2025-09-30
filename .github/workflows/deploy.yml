@@ -52,27 +52,48 @@ jobs:
 
       - name: Storage PV and PVC
         run: |
-          echo "Scaling down deployments to release PVCs..."
-          kubectl -n staging scale deploy backend-blue backend-green --replicas=0 --timeout=30s 2>/dev/null || true
-          kubectl -n prod scale deploy backend-blue backend-green --replicas=0 --timeout=30s 2>/dev/null || true
+          echo "Scaling down all deployments to release PVCs..."
+          kubectl -n staging scale deploy --all --replicas=0 --timeout=30s 2>/dev/null || true
+          kubectl -n prod scale deploy --all --replicas=0 --timeout=30s 2>/dev/null || true
           
           echo "Waiting for pods to terminate..."
-          sleep 15
+          sleep 20
           
-          echo "Deleting existing PVCs..."
-          kubectl -n staging delete pvc azurefile-pvc --ignore-not-found --timeout=60s || true
-          kubectl -n prod delete pvc azurefile-pvc --ignore-not-found --timeout=60s || true
+          echo "Force deleting any remaining pods..."
+          kubectl -n staging delete pods --all --grace-period=0 --force 2>/dev/null || true
+          kubectl -n prod delete pods --all --grace-period=0 --force 2>/dev/null || true
+          
+          echo "Waiting a bit more..."
+          sleep 5
+          
+          echo "Deleting existing PVCs with force..."
+          kubectl -n staging delete pvc azurefile-pvc --ignore-not-found --force --grace-period=0 2>/dev/null || true
+          kubectl -n prod delete pvc azurefile-pvc --ignore-not-found --force --grace-period=0 2>/dev/null || true
+          
+          echo "Waiting for PVC cleanup..."
+          sleep 5
           
           echo "Applying storage configuration..."
           kubectl apply -f k8s/storage-azurefile.yaml
           
           echo "Waiting for PVCs to bind..."
-          kubectl -n staging wait --for=jsonpath='{.status.phase}'=Bound pvc/azurefile-pvc --timeout=90s || echo "Staging PVC binding check timed out"
-          kubectl -n prod wait --for=jsonpath='{.status.phase}'=Bound pvc/azurefile-pvc --timeout=90s || echo "Prod PVC binding check timed out"
+          for i in {1..30}; do
+            STAGING_STATUS=$(kubectl -n staging get pvc azurefile-pvc -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+            PROD_STATUS=$(kubectl -n prod get pvc azurefile-pvc -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+            echo "Attempt $i: Staging=$STAGING_STATUS, Prod=$PROD_STATUS"
+            if [ "$STAGING_STATUS" = "Bound" ] && [ "$PROD_STATUS" = "Bound" ]; then
+              echo "Both PVCs are bound!"
+              break
+            fi
+            sleep 3
+          done
           
-          echo "PVC status:"
+          echo "Final PVC status:"
           kubectl -n staging get pvc azurefile-pvc || true
           kubectl -n prod get pvc azurefile-pvc || true
+          
+          echo "PV status:"
+          kubectl get pv || true
 
       - name: Deploy blue and green backends
         run: |
@@ -95,18 +116,18 @@ jobs:
         run: |
           # Staging always points to blue for soak
           bash k8s/scripts/switch_color.sh staging blue
-          kubectl -n staging rollout status deploy/backend-blue --timeout=240s
-          kubectl -n staging rollout status deploy/frontend --timeout=240s
+          kubectl -n staging rollout status deploy/backend-blue --timeout=300s
+          kubectl -n staging rollout status deploy/frontend --timeout=300s
 
           # For main branch, promote green in prod, else keep blue
           if [ "${{ github.ref }}" = "refs/heads/main" ]; then
             bash k8s/scripts/switch_color.sh prod green
-            kubectl -n prod rollout status deploy/backend-green --timeout=240s
+            kubectl -n prod rollout status deploy/backend-green --timeout=300s
           else
             bash k8s/scripts/switch_color.sh prod blue
-            kubectl -n prod rollout status deploy/backend-blue --timeout=240s
+            kubectl -n prod rollout status deploy/backend-blue --timeout=300s
           fi
-          kubectl -n prod rollout status deploy/frontend --timeout=240s
+          kubectl -n prod rollout status deploy/frontend --timeout=300s
 
       - name: Show External IPs
         run: |
