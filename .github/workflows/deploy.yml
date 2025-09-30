@@ -1,8 +1,9 @@
 name: CD - Staging and Production
 
 on:
-  push:
-    branches: ["testing", "main"]
+  workflow_run:
+    workflows: ["CI - Build and Push to ACR"]
+    types: [completed]
   workflow_dispatch: {}
 
 env:
@@ -10,87 +11,60 @@ env:
 
 jobs:
   deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup kubectl
+        shell: bash
+        env:
+          AKS_KUBECONFIG_B64: ${{ secrets.AKS_KUBECONFIG }}
         run: |
-          echo "${{ secrets.AKS_KUBECONFIG }}" | base64 -d > kubeconfig
+          python - <<'PY'
+          import os, base64, re, sys
+          b64 = os.environ['AKS_KUBECONFIG_B64']
+          b64 = re.sub(r'\s+', '', b64).replace('\r','')
+          try:
+            data = base64.b64decode(b64, validate=True)
+          except Exception as e:
+            sys.stderr.write(f"Invalid base64 in AKS_KUBECONFIG: {e}\n")
+            sys.exit(1)
+          open('kubeconfig','wb').write(data)
+          PY
           echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
           kubectl version --client
 
       - name: Render manifests with image tags
         run: |
           sed -i "s#REPLACE_ACR#${{ secrets.ACR_LOGIN_SERVER }}#g" k8s/backend-deploy-blue.yaml k8s/backend-deploy-green.yaml k8s/frontend-deploy.yaml
-          sed -i "s#REPLACE_TAG#${{ env.IMAGE_TAG }}#g" k8s/backend-deploy-blue.yaml k8s/backend-deploy-green.yaml k8s/frontend-deploy.yaml
+          sed -i "s#REPLACE_TAG#${{ env.IMAGE_TAG }}#g"           k8s/backend-deploy-blue.yaml k8s/backend-deploy-green.yaml k8s/frontend-deploy.yaml
 
       - name: Create namespaces
         run: |
           kubectl apply -f k8s/namespace-staging.yaml
           kubectl apply -f k8s/namespace-prod.yaml
 
-      - name: Bootstrap secrets and configmaps
-        run: |
-          kubectl apply -f k8s/backend-config.yaml
+      - name: ConfigMaps
+        run: kubectl apply -f k8s/backend-config.yaml
 
+      - name: Secrets
+        run: |
           kubectl -n staging create secret generic newsapi-secret --from-literal=NEWSAPI_KEY="${{ secrets.NEWSAPI_KEY }}" --dry-run=client -o yaml | kubectl apply -f -
           kubectl -n prod    create secret generic newsapi-secret --from-literal=NEWSAPI_KEY="${{ secrets.NEWSAPI_KEY }}" --dry-run=client -o yaml | kubectl apply -f -
-
           kubectl -n staging create secret generic azure-storage-secret \
             --from-literal=azurestorageaccountname="${{ secrets.STORAGE_ACCOUNT_NAME }}" \
             --from-literal=azurestorageaccountkey="${{ secrets.STORAGE_ACCOUNT_KEY }}" \
             --dry-run=client -o yaml | kubectl apply -f -
-
           kubectl -n prod create secret generic azure-storage-secret \
             --from-literal=azurestorageaccountname="${{ secrets.STORAGE_ACCOUNT_NAME }}" \
             --from-literal=azurestorageaccountkey="${{ secrets.STORAGE_ACCOUNT_KEY }}" \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Verify Azure File Shares
-        run: |
-          az storage share create \
-            --name newsflow-staging \
-            --account-name ${{ secrets.STORAGE_ACCOUNT_NAME }} \
-            --account-key ${{ secrets.STORAGE_ACCOUNT_KEY }} \
-            --output none 2>/dev/null || echo "newsflow-staging share ready"
-          
-          az storage share create \
-            --name newsflow-prod \
-            --account-name ${{ secrets.STORAGE_ACCOUNT_NAME }} \
-            --account-key ${{ secrets.STORAGE_ACCOUNT_KEY }} \
-            --output none 2>/dev/null || echo "newsflow-prod share ready"
-
       - name: Storage PV and PVC
-        run: |
-          kubectl -n staging scale deploy --all --replicas=0 --timeout=30s 2>/dev/null || true
-          kubectl -n prod scale deploy --all --replicas=0 --timeout=30s 2>/dev/null || true
-          
-          sleep 15
-          
-          kubectl -n staging delete pods --all --grace-period=0 --force 2>/dev/null || true
-          kubectl -n prod delete pods --all --grace-period=0 --force 2>/dev/null || true
-          
-          sleep 5
-          
-          kubectl -n staging delete pvc azurefile-pvc --ignore-not-found --force --grace-period=0 2>/dev/null || true
-          kubectl -n prod delete pvc azurefile-pvc --ignore-not-found --force --grace-period=0 2>/dev/null || true
-          
-          sleep 5
-          
-          kubectl patch pv azurefile-pv-staging -p '{"spec":{"claimRef": null}}' 2>/dev/null || true
-          kubectl patch pv azurefile-pv-prod -p '{"spec":{"claimRef": null}}' 2>/dev/null || true
-          
-          sleep 3
-          
-          kubectl apply -f k8s/storage-azurefile.yaml
-          
-          sleep 5
-          
-          kubectl -n staging wait --for=jsonpath='{.status.phase}'=Bound pvc/azurefile-pvc --timeout=60s || echo "WARNING: Staging PVC not bound"
-          kubectl -n prod wait --for=jsonpath='{.status.phase}'=Bound pvc/azurefile-pvc --timeout=60s || echo "WARNING: Prod PVC not bound"
+        run: kubectl apply -f k8s/storage-azurefile.yaml
 
-      - name: Deploy blue and green backends
+      - name: Deploy backends (blue & green)
         run: |
           kubectl apply -f k8s/backend-deploy-blue.yaml
           kubectl apply -f k8s/backend-deploy-green.yaml
@@ -101,8 +75,29 @@ jobs:
           kubectl apply -f k8s/backend-hpa.yaml
 
       - name: Frontend
+        run: kubectl apply -f k8s/frontend-deploy.yaml
+
+      # Fast check + diagnostics before long waits
+      - name: Quick rollout check for backend-blue (staging) + auto-diagnostics
+        shell: bash
         run: |
-          kubectl apply -f k8s/frontend-deploy.yaml
+          set +e
+          kubectl -n staging rollout status deploy/backend-blue --timeout=120s
+          RC=$?
+          if [ $RC -ne 0 ]; then
+            echo "Rollout timed out. Dumping diagnostics..."
+            kubectl -n staging get pods -l app=backend,color=blue -o wide
+            kubectl -n staging describe deploy backend-blue
+            kubectl -n staging get events --sort-by=.lastTimestamp | tail -n 120
+            for p in $(kubectl -n staging get pods -l app=backend,color=blue -o name); do
+              echo "---- DESCRIBE $p ----"
+              kubectl -n staging describe $p | sed -n '1,200p'
+              echo "---- LOGS $p ----"
+              kubectl -n staging logs $p --tail=200 || true
+              echo "============================"
+            done
+            exit 1
+          fi
 
       - name: Set color and wait
         run: |
@@ -110,7 +105,7 @@ jobs:
           kubectl -n staging rollout status deploy/backend-blue --timeout=300s
           kubectl -n staging rollout status deploy/frontend --timeout=300s
 
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          if [ "${{ github.event.workflow_run.head_branch || github.ref_name }}" = "main" ]; then
             bash k8s/scripts/switch_color.sh prod green
             kubectl -n prod rollout status deploy/backend-green --timeout=300s
           else
@@ -123,3 +118,4 @@ jobs:
         run: |
           echo "STAGING FRONTEND:"; kubectl -n staging get svc frontend-svc -o wide || true
           echo "PROD FRONTEND:";    kubectl -n prod    get svc frontend-svc -o wide || true
+  
