@@ -1,0 +1,93 @@
+name: CD - Staging and Production
+
+on:
+  push:
+    branches: ["testing", "main"]
+  workflow_dispatch: {}
+
+env:
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        run: |
+          echo "${{ secrets.AKS_KUBECONFIG }}" | base64 -d > kubeconfig
+          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+          kubectl version --client
+
+      - name: Render manifests with image tags
+        run: |
+          sed -i "s#REPLACE_ACR#${{ secrets.ACR_LOGIN_SERVER }}#g" k8s/backend-deploy-blue.yaml k8s/backend-deploy-green.yaml k8s/frontend-deploy.yaml
+          sed -i "s#REPLACE_TAG#${{ env.IMAGE_TAG }}#g" k8s/backend-deploy-blue.yaml k8s/backend-deploy-green.yaml k8s/frontend-deploy.yaml
+
+      - name: Create namespaces
+        run: |
+          kubectl apply -f k8s/namespace-staging.yaml
+          kubectl apply -f k8s/namespace-prod.yaml
+
+      - name: Bootstrap secrets and configmaps
+        run: |
+          # Config
+          kubectl -n staging apply -f k8s/backend-config.yaml
+          kubectl -n prod    apply -f k8s/backend-config.yaml
+
+          # NewsAPI secret
+          kubectl -n staging create secret generic newsapi-secret --from-literal=NEWSAPI_KEY="${{ secrets.NEWSAPI_KEY }}" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n prod    create secret generic newsapi-secret --from-literal=NEWSAPI_KEY="${{ secrets.NEWSAPI_KEY }}" --dry-run=client -o yaml | kubectl apply -f -
+
+          # Azure Storage secret, created from secrets that infra workflow saved
+          kubectl -n staging create secret generic azure-storage-secret \
+            --from-literal=azurestorageaccountname="${{ secrets.STORAGE_ACCOUNT_NAME }}" \
+            --from-literal=azurestorageaccountkey="${{ secrets.STORAGE_ACCOUNT_KEY }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          kubectl -n prod create secret generic azure-storage-secret \
+            --from-literal=azurestorageaccountname="${{ secrets.STORAGE_ACCOUNT_NAME }}" \
+            --from-literal=azurestorageaccountkey="${{ secrets.STORAGE_ACCOUNT_KEY }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Storage PV and PVC
+        run: |
+          kubectl -n staging apply -f k8s/storage-azurefile.yaml
+          kubectl -n prod    apply -f k8s/storage-azurefile.yaml
+
+      - name: Deploy blue and green backends
+        run: |
+          kubectl -n staging apply -f k8s/backend-deploy-blue.yaml
+          kubectl -n staging apply -f k8s/backend-deploy-green.yaml
+          kubectl -n prod    apply -f k8s/backend-deploy-blue.yaml
+          kubectl -n prod    apply -f k8s/backend-deploy-green.yaml
+
+      - name: Service and HPA
+        run: |
+          kubectl -n staging apply -f k8s/backend-service.yaml
+          kubectl -n staging apply -f k8s/backend-hpa.yaml
+          kubectl -n prod    apply -f k8s/backend-service.yaml
+          kubectl -n prod    apply -f k8s/backend-hpa.yaml
+
+      - name: Frontend
+        run: |
+          kubectl -n staging apply -f k8s/frontend-deploy.yaml
+          kubectl -n prod    apply -f k8s/frontend-deploy.yaml
+
+      - name: Set color and wait
+        run: |
+          # Staging always points to blue for soak
+          bash k8s/scripts/switch_color.sh staging blue
+          kubectl -n staging rollout status deploy/backend-blue --timeout=180s
+          kubectl -n staging rollout status deploy/frontend --timeout=180s
+
+          # For main branch, promote green in prod, else keep blue
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            bash k8s/scripts/switch_color.sh prod green
+            kubectl -n prod rollout status deploy/backend-green --timeout=180s
+          else
+            bash k8s/scripts/switch_color.sh prod blue
+            kubectl -n prod rollout status deploy/backend-blue --timeout=180s
+          fi
+          kubectl -n prod rollout status deploy/frontend --timeout=180s

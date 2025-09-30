@@ -1,0 +1,36 @@
+name: CI - Build and Push to ACR
+
+on:
+  push:
+    branches: ["testing", "main"]
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_TAG: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.number, github.sha) || github.sha }}
+
+jobs:
+  build_and_push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker login to ACR
+        run: echo "${{ secrets.ACR_PASSWORD }}" | docker login "${{ secrets.ACR_LOGIN_SERVER }}" -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+
+      - name: Build backend
+        run: docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/login/newsflow-backend:${{ env.IMAGE_TAG }} ./backend
+
+      - name: Build frontend
+        run: docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/login/newsflow-frontend:${{ env.IMAGE_TAG }} ./frontend
+
+      - name: Push backend
+        run: docker push ${{ secrets.ACR_LOGIN_SERVER }}/login/newsflow-backend:${{ env.IMAGE_TAG }}
+
+      - name: Push frontend
+        run: docker push ${{ secrets.ACR_LOGIN_SERVER }}/login/newsflow-frontend:${{ env.IMAGE_TAG }}

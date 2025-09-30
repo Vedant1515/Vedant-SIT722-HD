@@ -1,0 +1,54 @@
+name: Monitoring - kube-prometheus-stack
+
+on:
+  push:
+    branches: ["monitoring"]
+  workflow_dispatch: {}
+
+jobs:
+  setup_monitoring:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        run: |
+          echo "${{ secrets.AKS_KUBECONFIG }}" | base64 -d > kubeconfig
+          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+          kubectl version --client
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Add repos
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+
+      - name: Create monitoring ns
+        run: kubectl create ns monitoring --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Install kube-prometheus-stack
+        run: |
+          helm upgrade --install monitor prometheus-community/kube-prometheus-stack \
+            -n monitoring \
+            -f k8s/prometheus/values-kube-prom.yaml
+
+      - name: Apply color-agnostic metrics Service and ServiceMonitors
+        run: |
+          kubectl apply -f k8s/metrics/backend-metrics-service.yaml
+          kubectl apply -f k8s/prometheus/backend-servicemonitor-staging.yaml
+          kubectl apply -f k8s/prometheus/backend-servicemonitor-prod.yaml
+
+      - name: Show Grafana LB
+        run: |
+          for i in {1..30}; do
+            IP=$(kubectl -n monitoring get svc monitor-grafana -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+            HN=$(kubectl -n monitoring get svc monitor-grafana -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+            if [ -n "$IP" ] || [ -n "$HN" ]; then
+              echo "Grafana http://$IP$HN  user: admin  pass: admin123"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Grafana LB not ready yet"
