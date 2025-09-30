@@ -32,9 +32,8 @@ jobs:
 
       - name: Bootstrap secrets and configmaps
         run: |
-          # Config
-          kubectl -n staging apply -f k8s/backend-config.yaml
-          kubectl -n prod    apply -f k8s/backend-config.yaml
+          # Config (file contains both namespaces, apply once without -n)
+          kubectl apply -f k8s/backend-config.yaml
 
           # NewsAPI secret
           kubectl -n staging create secret generic newsapi-secret --from-literal=NEWSAPI_KEY="${{ secrets.NEWSAPI_KEY }}" --dry-run=client -o yaml | kubectl apply -f -
