@@ -1,14 +1,12 @@
-# Azure Files CSI PV + PVC using a secret with storage account name and key
+# --- STAGING PV (cluster-scoped; no namespace) ---
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: azurefile-pv
-  namespace: staging
+  name: azurefile-pv-staging
 spec:
   capacity:
     storage: 5Gi
-  accessModes:
-    - ReadWriteMany
+  accessModes: [ReadWriteMany]
   persistentVolumeReclaimPolicy: Retain
   csi:
     driver: file.csi.azure.com
@@ -25,23 +23,22 @@ metadata:
   name: azurefile-pvc
   namespace: staging
 spec:
-  accessModes:
-    - ReadWriteMany
+  accessModes: [ReadWriteMany]
   resources:
     requests:
       storage: 5Gi
-  volumeName: azurefile-pv
+  volumeName: azurefile-pv-staging
+
+# --- PROD PV (cluster-scoped; no namespace) ---
 ---
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: azurefile-pv
-  namespace: prod
+  name: azurefile-pv-prod
 spec:
   capacity:
     storage: 5Gi
-  accessModes:
-    - ReadWriteMany
+  accessModes: [ReadWriteMany]
   persistentVolumeReclaimPolicy: Retain
   csi:
     driver: file.csi.azure.com
@@ -58,9 +55,8 @@ metadata:
   name: azurefile-pvc
   namespace: prod
 spec:
-  accessModes:
-    - ReadWriteMany
+  accessModes: [ReadWriteMany]
   resources:
     requests:
       storage: 5Gi
-  volumeName: azurefile-pv
+  volumeName: azurefile-pv-prod
